@@ -1,2 +1,2 @@
 # ll
-Thread safe linked list data structure for C
+Thread safe linked list data structure for C.
