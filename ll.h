@@ -33,10 +33,15 @@
 
 #include <pthread.h>
 
+enum locktype {
+    l_read,
+    l_write
+};
+
 /* macros */
 
-#define LOCK(m) pthread_mutex_lock(&(m))
-#define UNLOCK(m) pthread_mutex_unlock(&(m))
+#define LOCK(lt, lk) ((lt) == l_read) ? pthread_rwlock_rdlock(&(lk)) : pthread_rwlock_wrlock(&(lk))
+#define UNLOCK(lk) pthread_rwlock_unlock(&(lk));
 
 /* type definitions */
 
@@ -58,7 +63,7 @@ struct ll {
     ll_node_t *hd;
 
     // mutex for thread safety
-    pthread_mutex_t m;
+    pthread_rwlock_t m;
 
     // a function that is called every time a value is deleted
     // with a pointer to that value

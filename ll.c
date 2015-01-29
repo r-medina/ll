@@ -6,7 +6,7 @@
 struct ll_node {
     void *val;
     ll_node_t *nxt;
-    pthread_mutex_t m;
+    pthread_rwlock_t m;
 };
 
 /**
@@ -23,7 +23,7 @@ ll_t *ll_new(gen_fun_t val_teardown) {
     list->hd = NULL;
     list->len = 0;
     list->val_teardown = val_teardown;
-    pthread_mutex_init(&list->m, NULL);
+    pthread_rwlock_init(&list->m, NULL);
 
     return list;
 }
@@ -39,14 +39,14 @@ ll_t *ll_new(gen_fun_t val_teardown) {
 void ll_delete(ll_t *list) {
     ll_node_t *node = list->hd;
     ll_node_t *tmp;
-    LOCK(list->m);
+    LOCK(l_write, list->m);
     while (node != NULL) {
-        LOCK(node->m);
+        LOCK(l_write, node->m);
         list->val_teardown(node->val);
         UNLOCK(node->m);
         tmp = node;
         node = node->nxt;
-        pthread_mutex_destroy(&(tmp->m));
+        pthread_rwlock_destroy(&(tmp->m));
         free(tmp);
         (list->len)--;
     }
@@ -55,7 +55,7 @@ void ll_delete(ll_t *list) {
     list->val_printer = NULL;
     UNLOCK(list->m);
 
-    pthread_mutex_destroy(&(list->m));
+    pthread_rwlock_destroy(&(list->m));
 
     free(list);
 }
@@ -73,7 +73,7 @@ ll_node_t *ll_new_node(void *val) {
     ll_node_t *node = (ll_node_t *)malloc(sizeof(ll_node_t));
     node->val = val;
     node->nxt = NULL;
-    pthread_mutex_init(&node->m, NULL);
+    pthread_rwlock_init(&node->m, NULL);
 
     return node;
 }
@@ -82,7 +82,7 @@ ll_node_t *ll_new_node(void *val) {
  * @function ll_select_n
  *
  * Actually selects the n - 1th element. Inserting and deleting at the front of a
- * list do not really depend on this.
+ * list do NOT really depend on this.
  *
  * @param list - the linked list
  * @param node - a pointer to set when the node is found
@@ -90,17 +90,31 @@ ll_node_t *ll_new_node(void *val) {
  *
  * @returns 0 if successful, -1 otherwise
  */
-int ll_select_n(ll_t *list, ll_node_t **node, int n) {
-    if ((n > list->len) || (n < 0))
+int ll_select_n(ll_t *list, ll_node_t **node, int n, enum locktype lt) {
+    if (n < 0) // don't check against list->len because threads can add length
         return -1;
-
-    *node = list->hd;
 
     if (n == 0)
         return 0;
 
-    for (n--; n > 0; n--)
+    *node = list->hd;
+
+    ll_node_t *last;
+    for (n--; n > 0; n--) {
+        last = *node;
+        if (last == NULL) // happens when another thread deletes the end of a list
+            return -1;
+
+        LOCK(lt, last->m);
         *node = (*node)->nxt;
+        if (*node == NULL) { // happens when another thread deletes the end of a list
+            UNLOCK(last->m);
+            return -1;
+        }
+
+        LOCK(lt, (*node)->m);
+        UNLOCK(last->m);
+    }
 
     return 0;
 }
@@ -118,27 +132,29 @@ int ll_select_n(ll_t *list, ll_node_t **node, int n) {
  */
 int ll_insert_n(ll_t *list, void *val, int n) {
     ll_node_t *nth_node;
-    if (ll_select_n(list, &nth_node, n) != 0)
+    if (ll_select_n(list, &nth_node, n, l_write))
         return -1;
 
     ll_node_t *new_node = ll_new_node(val);
 
-    if (n == 0) {
+    if (n == 0) { // nth_node is list->hd
         new_node->nxt = list->hd;
-        LOCK(list->m);
+        if (new_node->nxt != NULL)
+            UNLOCK(new_node->nxt->m);
+        LOCK(l_write, list->m);
         list->hd = new_node;
         UNLOCK(list->m);
     } else if (list->len > 0) {
         new_node->nxt = nth_node->nxt;
-        LOCK(nth_node->m);
         nth_node->nxt = new_node;
         UNLOCK(nth_node->m);
     } else { // won't get here
+        UNLOCK(nth_node->m);
         free(new_node);
         return -1;
     }
 
-    LOCK(list->m);
+    LOCK(l_write, list->m);
     (list->len)++;
     UNLOCK(list->m);
 
@@ -186,28 +202,26 @@ int ll_insert_last(ll_t *list, void *val) {
 int ll_remove_n(ll_t *list, int n) {
     ll_node_t *nth_node;
 
-    if (ll_select_n(list, &nth_node, n) != 0) // if that node doesn't exist
+    if (ll_select_n(list, &nth_node, n, l_write)) // if that node doesn't exist
         return -1;
 
     ll_node_t *tmp;
     if ((n == 0) && (list->len > 0)) {
         tmp = list->hd;
-        LOCK(list->m);
+        LOCK(l_write, list->m);
         list->hd = tmp->nxt;
-        UNLOCK(list->m);
     } else {
         tmp = nth_node->nxt;
-        LOCK(nth_node->m);
         nth_node->nxt = nth_node->nxt == NULL ? NULL : nth_node->nxt->nxt;
-        UNLOCK(nth_node->m);
+        LOCK(l_write, list->m);
     }
+    UNLOCK(nth_node->m);
+
+    (list->len)--;
+    UNLOCK(list->m);
 
     list->val_teardown(tmp->val);
     free(tmp);
-
-    LOCK(list->m);
-    (list->len)--;
-    UNLOCK(list->m);
 
     return list->len;
 }
@@ -247,11 +261,11 @@ int ll_remove_search(ll_t *list, int cond(void *)) {
     if (node == NULL) {
         return -1;
     } else if (node == list->hd) {
-        LOCK(list->m);
+        LOCK(l_write, list->m);
         list->hd = node->nxt;
         UNLOCK(list->m);
     } else {
-        LOCK(last->m);
+        LOCK(l_write, last->m);
         last->nxt = node->nxt;
         UNLOCK(last->m);
     }
@@ -259,7 +273,7 @@ int ll_remove_search(ll_t *list, int cond(void *)) {
     list->val_teardown(node->val);
     free(node);
 
-    LOCK(list->m);
+    LOCK(l_write, list->m);
     (list->len)--;
     UNLOCK(list->m);
 
@@ -278,9 +292,10 @@ int ll_remove_search(ll_t *list, int cond(void *)) {
  */
 void *ll_get_n(ll_t *list, int n) {
     ll_node_t *node;
-    if (ll_select_n(list, &node, n + 1) != 0)
+    if (ll_select_n(list, &node, n + 1, l_read))
         return NULL;
 
+    UNLOCK(node->m);
     return node->val;
 }
 
@@ -309,7 +324,7 @@ void ll_map(ll_t *list, gen_fun_t f) {
     ll_node_t *node = list->hd;
 
     while (node != NULL) {
-        LOCK(node->m);
+        LOCK(l_read, node->m);
         f(node->val);
         UNLOCK(node->m);
         node = node->nxt;
