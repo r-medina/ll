@@ -1,3 +1,37 @@
+/**
+ * Thread-safe linked-list data-structure for C.
+ *
+ * See `../README.md` and `main()` in this file for usage.
+ *
+ * @file ll.c contains the implementatons of the functions outlined in `ll.h` as well as
+ * all the functions necessary to manipulate and handle nodes (which are not exposed to
+ * the user).
+ *
+ * @author r-medina
+ *
+ * The MIT License (MIT)
+ * 
+ * Copyright (c) 2015 r-medina
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -5,6 +39,7 @@
 
 /* macros */
 
+// for locking and unlocking rwlocks along with `locktype_t`
 #define RWLOCK(lt, lk) ((lt) == l_read)                   \
                            ? pthread_rwlock_rdlock(&(lk)) \
                            : pthread_rwlock_wrlock(&(lk))
@@ -14,14 +49,22 @@
 
 typedef enum locktype locktype_t;
 
+// locktype enumerates the two typs of rw locks. This isused in the macros above for
+// simplifying all the locking/unlocking that goes on.
 enum locktype {
     l_read,
     l_write
 };
 
+// ll_node models a linked-list node
 struct ll_node {
+    // pointer to the value at the node
     void *val;
+
+    // pointer to the next node
     ll_node_t *nxt;
+
+    // rw mutex
     pthread_rwlock_t m;
 };
 
@@ -388,7 +431,8 @@ int num_equals_3(void *n) {
 
 int main() {
     int *_n; // for storing returned ones
-    int test_num = 1;
+    int test_count = 1;
+    int fail_count = 0;
     int a = 0;
     int b = 1;
     int c = 2;
@@ -406,32 +450,36 @@ int main() {
 
     _n = (int *)ll_get_first(list);
     if (!(*_n == c)) {
-        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_num, c, *_n);
+        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_count, c, *_n);
+        fail_count++;
     } else
-        printf("PASS Test %d!\n", test_num);
-    test_num++;
+        fprintf(stderr, "PASS Test %d!\n", test_count);
+    test_count++;
 
     if (list->len != 1) {
-        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_num, 1, list->len);
+        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_count, 1, list->len);
+        fail_count++;
     } else
-        printf("PASS Test %d!\n", test_num);
-    test_num++;
+        fprintf(stderr, "PASS Test %d!\n", test_count);
+    test_count++;
 
     ll_insert_first(list, &b); // 1 in front
     ll_insert_first(list, &a); // 0 in front -> 0, 1, 2
 
     _n = (int *)ll_get_first(list);
     if (!(*_n == a)) {
-        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_num, a, *_n);
+        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_count, a, *_n);
+        fail_count++;
     } else
-        printf("PASS Test %d!\n", test_num);
-    test_num++;
+        fprintf(stderr, "PASS Test %d!\n", test_count);
+    test_count++;
 
     if (!(list->len == 3)) {
-        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_num, 3, list->len);
+        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_count, 3, list->len);
+        fail_count++;
     } else
-        printf("PASS Test %d!\n", test_num);
-    test_num++;
+        fprintf(stderr, "PASS Test %d!\n", test_count);
+    test_count++;
 
     ll_insert_last(list, &d); // 3 in back
     ll_insert_last(list, &e); // 4 in back
@@ -439,25 +487,30 @@ int main() {
 
     _n = (int *)ll_get_n(list, 5);
     if (!(*_n == f)) {
-        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_num, f, *_n);
+        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_count, f, *_n);
+        fail_count++;
     } else
-        printf("PASS Test %d!\n", test_num);
-    test_num++;
+        fprintf(stderr, "PASS Test %d!\n", test_count);
+    test_count++;
 
     if (!(list->len == 6)) {
-        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_num, 6, list->len);
+        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_count, 6, list->len);
+        fail_count++;
     } else
-        printf("PASS Test %d!\n", test_num);
-    test_num++;
+        fprintf(stderr, "PASS Test %d!\n", test_count);
+    test_count++;
 
     ll_insert_n(list, &g, 6); // 6 at index 6 -> 0, 1, 2, 3, 4, 5, 6
 
     int _i;
     for (_i = 0; _i < list->len; _i++) { // O(n^2) test lol
         _n = (int *)ll_get_n(list, _i);
-        if (!(*_n == _i))
+        if (!(*_n == _i)) {
+            fail_count++;
             fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", 1, _i, *_n);
-        test_num++;
+        } else
+            fprintf(stderr, "PASS Test %d!\n", test_count);
+        test_count++;
     }
 
     // (ll: 0 1 2 3 4 5 6), length: 7
@@ -475,5 +528,12 @@ int main() {
     ll_print(*list);
 
     ll_delete(list);
+
+    if (fail_count) {
+        fprintf(stderr, "FAILED %d tests of %d.\n", fail_count, test_count);
+        return fail_count;
+    }
+
+    fprintf(stderr, "PASSED all %d tests!\n", test_count);
 }
 #endif

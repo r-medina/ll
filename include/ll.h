@@ -1,7 +1,11 @@
 /**
- * Thread safe linked list data structure for C.
+ * Thread-safe linked-list data-structure for C.
  *
- * See `README.md` and `main()` in `ll.c` for usage.
+ * See `../README.md` and `main()` in `ll.c` for usage.
+ *
+ * @file ll.h contains the API for using this data-structure.
+ *
+ * @author r-medina
  *
  * The MIT License (MIT)
  * 
@@ -24,8 +28,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * @author r-medina
  */
 
 #ifndef LL_H
