@@ -3,6 +3,22 @@
 
 #include "ll.h"
 
+/* macros */
+
+#define RWLOCK(lt, lk) ((lt) == l_read)                   \
+                           ? pthread_rwlock_rdlock(&(lk)) \
+                           : pthread_rwlock_wrlock(&(lk))
+#define RWUNLOCK(lk) pthread_rwlock_unlock(&(lk));
+
+/* type definitions */
+
+typedef enum locktype locktype_t;
+
+enum locktype {
+    l_read,
+    l_write
+};
+
 struct ll_node {
     void *val;
     ll_node_t *nxt;
@@ -39,11 +55,11 @@ ll_t *ll_new(gen_fun_t val_teardown) {
 void ll_delete(ll_t *list) {
     ll_node_t *node = list->hd;
     ll_node_t *tmp;
-    LOCK(l_write, list->m);
+    RWLOCK(l_write, list->m);
     while (node != NULL) {
-        LOCK(l_write, node->m);
+        RWLOCK(l_write, node->m);
         list->val_teardown(node->val);
-        UNLOCK(node->m);
+        RWUNLOCK(node->m);
         tmp = node;
         node = node->nxt;
         pthread_rwlock_destroy(&(tmp->m));
@@ -53,7 +69,7 @@ void ll_delete(ll_t *list) {
     list->hd = NULL;
     list->val_teardown = NULL;
     list->val_printer = NULL;
-    UNLOCK(list->m);
+    RWUNLOCK(list->m);
 
     pthread_rwlock_destroy(&(list->m));
 
@@ -79,7 +95,7 @@ ll_node_t *ll_new_node(void *val) {
 }
 
 /**
- * @function ll_select_n
+ * @function ll_select_n_min_1
  *
  * Actually selects the n - 1th element. Inserting and deleting at the front of a
  * list do NOT really depend on this.
@@ -90,30 +106,32 @@ ll_node_t *ll_new_node(void *val) {
  *
  * @returns 0 if successful, -1 otherwise
  */
-int ll_select_n(ll_t *list, ll_node_t **node, int n, enum locktype lt) {
+int ll_select_n_min_1(ll_t *list, ll_node_t **node, int n, locktype_t lt) {
     if (n < 0) // don't check against list->len because threads can add length
         return -1;
 
     if (n == 0)
         return 0;
 
+    // n > 0
+
     *node = list->hd;
+    if (*node == NULL) // if head is NULL, but we're trying to go past it,
+        return -1;     // we have a problem
+
+    RWLOCK(lt, (*node)->m);
 
     ll_node_t *last;
-    for (n--; n > 0; n--) {
+    for (; n > 1; n--) {
         last = *node;
-        if (last == NULL) // happens when another thread deletes the end of a list
-            return -1;
-
-        LOCK(lt, last->m);
-        *node = (*node)->nxt;
+        *node = last->nxt;
         if (*node == NULL) { // happens when another thread deletes the end of a list
-            UNLOCK(last->m);
+            RWUNLOCK(last->m);
             return -1;
         }
 
-        LOCK(lt, (*node)->m);
-        UNLOCK(last->m);
+        RWLOCK(lt, (*node)->m);
+        RWUNLOCK(last->m);
     }
 
     return 0;
@@ -131,32 +149,27 @@ int ll_select_n(ll_t *list, ll_node_t **node, int n, enum locktype lt) {
  * @returns 0 if successful, -1 otherwise
  */
 int ll_insert_n(ll_t *list, void *val, int n) {
-    ll_node_t *nth_node;
-    if (ll_select_n(list, &nth_node, n, l_write))
-        return -1;
-
     ll_node_t *new_node = ll_new_node(val);
 
     if (n == 0) { // nth_node is list->hd
+        RWLOCK(l_write, list->m);
         new_node->nxt = list->hd;
-        if (new_node->nxt != NULL)
-            UNLOCK(new_node->nxt->m);
-        LOCK(l_write, list->m);
         list->hd = new_node;
-        UNLOCK(list->m);
-    } else if (list->len > 0) {
+        RWUNLOCK(list->m);
+    } else {
+        ll_node_t *nth_node;
+        if (ll_select_n_min_1(list, &nth_node, n, l_write)) {
+            free(new_node);
+            return -1;
+        }
         new_node->nxt = nth_node->nxt;
         nth_node->nxt = new_node;
-        UNLOCK(nth_node->m);
-    } else { // won't get here
-        UNLOCK(nth_node->m);
-        free(new_node);
-        return -1;
+        RWUNLOCK(nth_node->m);
     }
 
-    LOCK(l_write, list->m);
+    RWLOCK(l_write, list->m);
     (list->len)++;
-    UNLOCK(list->m);
+    RWUNLOCK(list->m);
 
     return list->len;
 }
@@ -200,25 +213,24 @@ int ll_insert_last(ll_t *list, void *val) {
  * @returns the new length of thew linked list on success, -1 otherwise
  */
 int ll_remove_n(ll_t *list, int n) {
-    ll_node_t *nth_node;
-
-    if (ll_select_n(list, &nth_node, n, l_write)) // if that node doesn't exist
-        return -1;
-
     ll_node_t *tmp;
-    if ((n == 0) && (list->len > 0)) {
+    if (n == 0) {
+        RWLOCK(l_write, list->m);
         tmp = list->hd;
-        LOCK(l_write, list->m);
         list->hd = tmp->nxt;
     } else {
+        ll_node_t *nth_node;
+        if (ll_select_n_min_1(list, &nth_node, n, l_write)) // if that node doesn't exist
+            return -1;
+
         tmp = nth_node->nxt;
         nth_node->nxt = nth_node->nxt == NULL ? NULL : nth_node->nxt->nxt;
-        LOCK(l_write, list->m);
+        RWUNLOCK(nth_node->m);
+        RWLOCK(l_write, list->m);
     }
-    UNLOCK(nth_node->m);
 
     (list->len)--;
-    UNLOCK(list->m);
+    RWUNLOCK(list->m);
 
     list->val_teardown(tmp->val);
     free(tmp);
@@ -261,21 +273,21 @@ int ll_remove_search(ll_t *list, int cond(void *)) {
     if (node == NULL) {
         return -1;
     } else if (node == list->hd) {
-        LOCK(l_write, list->m);
+        RWLOCK(l_write, list->m);
         list->hd = node->nxt;
-        UNLOCK(list->m);
+        RWUNLOCK(list->m);
     } else {
-        LOCK(l_write, last->m);
+        RWLOCK(l_write, last->m);
         last->nxt = node->nxt;
-        UNLOCK(last->m);
+        RWUNLOCK(last->m);
     }
 
     list->val_teardown(node->val);
     free(node);
 
-    LOCK(l_write, list->m);
+    RWLOCK(l_write, list->m);
     (list->len)--;
-    UNLOCK(list->m);
+    RWUNLOCK(list->m);
 
     return list->len;
 }
@@ -292,10 +304,10 @@ int ll_remove_search(ll_t *list, int cond(void *)) {
  */
 void *ll_get_n(ll_t *list, int n) {
     ll_node_t *node;
-    if (ll_select_n(list, &node, n + 1, l_read))
+    if (ll_select_n_min_1(list, &node, n + 1, l_read))
         return NULL;
 
-    UNLOCK(node->m);
+    RWUNLOCK(node->m);
     return node->val;
 }
 
@@ -324,9 +336,9 @@ void ll_map(ll_t *list, gen_fun_t f) {
     ll_node_t *node = list->hd;
 
     while (node != NULL) {
-        LOCK(l_read, node->m);
+        RWLOCK(l_read, node->m);
         f(node->val);
-        UNLOCK(node->m);
+        RWUNLOCK(node->m);
         node = node->nxt;
     }
 }
@@ -375,6 +387,8 @@ int num_equals_3(void *n) {
 }
 
 int main() {
+    int *_n; // for storing returned ones
+    int test_num = 1;
     int a = 0;
     int b = 1;
     int c = 2;
@@ -388,44 +402,78 @@ int main() {
     ll_t *list = ll_new(num_teardown);
     list->val_printer = num_printer;
 
-    ll_insert_first(list, &c);
-    ll_insert_first(list, &b);
-    ll_insert_first(list, &a);
-    ll_insert_last(list, &d);
-    ll_insert_last(list, &e);
-    ll_insert_last(list, &f);
-    ll_insert_n(list, &g, 5);
+    ll_insert_first(list, &c); // 2 in front
+
+    _n = (int *)ll_get_first(list);
+    if (!(*_n == c)) {
+        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_num, c, *_n);
+    } else
+        printf("PASS Test %d!\n", test_num);
+    test_num++;
+
+    if (list->len != 1) {
+        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_num, 1, list->len);
+    } else
+        printf("PASS Test %d!\n", test_num);
+    test_num++;
+
+    ll_insert_first(list, &b); // 1 in front
+    ll_insert_first(list, &a); // 0 in front -> 0, 1, 2
+
+    _n = (int *)ll_get_first(list);
+    if (!(*_n == a)) {
+        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_num, a, *_n);
+    } else
+        printf("PASS Test %d!\n", test_num);
+    test_num++;
+
+    if (!(list->len == 3)) {
+        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_num, 3, list->len);
+    } else
+        printf("PASS Test %d!\n", test_num);
+    test_num++;
+
+    ll_insert_last(list, &d); // 3 in back
+    ll_insert_last(list, &e); // 4 in back
+    ll_insert_last(list, &f); // 5 in back
+
+    _n = (int *)ll_get_n(list, 5);
+    if (!(*_n == f)) {
+        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_num, f, *_n);
+    } else
+        printf("PASS Test %d!\n", test_num);
+    test_num++;
+
+    if (!(list->len == 6)) {
+        fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", test_num, 6, list->len);
+    } else
+        printf("PASS Test %d!\n", test_num);
+    test_num++;
+
+    ll_insert_n(list, &g, 6); // 6 at index 6 -> 0, 1, 2, 3, 4, 5, 6
+
+    int _i;
+    for (_i = 0; _i < list->len; _i++) { // O(n^2) test lol
+        _n = (int *)ll_get_n(list, _i);
+        if (!(*_n == _i))
+            fprintf(stderr, "FAIL Test %d: Expected %d, but got %d.\n", 1, _i, *_n);
+        test_num++;
+    }
+
+    // (ll: 0 1 2 3 4 5 6), length: 7
+
+    ll_remove_first(list);                // (ll: 1 2 3 4 5 6), length: 6
+    ll_remove_n(list, 1);                 // (ll: 1 3 4 5 6),   length: 5
+    ll_remove_n(list, 2);                 // (ll: 1 3 5 6),     length: 4
+    ll_remove_n(list, 5);                 // (ll: 1 3 5 6),     length: 4; does nothing
+    ll_remove_search(list, num_equals_3); // (ll: 1 5 6),       length: 3
+    ll_insert_first(list, &h);            // (ll: 3 1 5 6),     length: 5
+    ll_insert_last(list, &i);             // (ll: 3 1 5 6 3),   length: 5
+    ll_remove_search(list, num_equals_3); // (ll: 1 5 6 3),     length: 4
+    ll_remove_search(list, num_equals_3); // (ll: 1 5 6),       length: 3
+
     ll_print(*list);
 
-    printf("remove 0th\n");
-    ll_remove_first(list);
-    ll_print(*list);
-    printf("remove 1st\n");
-    ll_remove_n(list, 1);
-    ll_print(*list);
-    printf("remove 2nd\n");
-    ll_remove_n(list, 2);
-    ll_print(*list);
-    printf("remove 5th\n");
-    ll_remove_n(list, 5);
-    ll_print(*list);
-
-    printf("remove 3\n");
-    ll_remove_search(list, num_equals_3);
-    ll_print(*list);
-    ll_insert_first(list, &h);
-    ll_insert_last(list, &i);
-    ll_print(*list);
-
-    printf("remove 3\n");
-    ll_remove_search(list, num_equals_3);
-    ll_print(*list);
-
-    printf("remove 3\n");
-    ll_remove_search(list, num_equals_3);
-    ll_print(*list);
-
-    printf("destroy\n");
     ll_delete(list);
 }
 #endif

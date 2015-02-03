@@ -23,9 +23,11 @@ CFLAGS = -Wall -Werror -Wextra -Wunused
 CFLAGS += -g -std=c99 -D_GNU_SOURCE -pthread -O3
 
 # designates which rules aren't actually targets
-.PHONY: all clean clean_obj clean_ll
+.PHONY: all test clean clean_obj clean_ll
 
-all: $(OBJ)
+all: $(OBJ) ll
+
+obj: $(OBJ)
 
 # combiles the object files necessary for linking
 %.o: %.c
@@ -34,6 +36,9 @@ all: $(OBJ)
 # my linked list library
 ll: %: %.c
 	$(CC) $(CFLAGS) -DLL -o $@ $^
+
+test: ll
+	./ll
 
 # cleans everything up when done
 clean: clean_obj clean_ll

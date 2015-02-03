@@ -33,16 +33,6 @@
 
 #include <pthread.h>
 
-enum locktype {
-    l_read,
-    l_write
-};
-
-/* macros */
-
-#define LOCK(lt, lk) ((lt) == l_read) ? pthread_rwlock_rdlock(&(lk)) : pthread_rwlock_wrlock(&(lk))
-#define UNLOCK(lk) pthread_rwlock_unlock(&(lk));
-
 /* type definitions */
 
 // useful for casting
@@ -76,8 +66,8 @@ struct ll {
 /* function prototypes */
 
 // returns a pointer to an allocated linked list.
-// needs a taredown function that is called with a pointer to the value of a node
-// when it is being deleted
+// needs a taredown function that is called with
+// a pointer to the value when it is being deleted.
 ll_t *ll_new(gen_fun_t val_teardown);
 
 // traverses the linked list, deallocated everything (including `list`)
