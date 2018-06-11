@@ -381,8 +381,9 @@ void ll_map(ll_t *list, gen_fun_t f) {
     while (node != NULL) {
         RWLOCK(l_read, node->m);
         f(node->val);
-        RWUNLOCK(node->m);
+	ll_node_t *old_node = node;
         node = node->nxt;
+        RWUNLOCK(old_node->m);
     }
 }
 
