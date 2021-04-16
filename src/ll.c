@@ -346,7 +346,7 @@ int ll_remove_search(ll_t *list, int cond(void *)) {
  * @returns the `val` attribute of the nth element of `list`.
  */
 void *ll_get_n(ll_t *list, int n) {
-    ll_node_t *node;
+    ll_node_t *node = 0;
     if (ll_select_n_min_1(list, &node, n + 1, l_read))
         return NULL;
 
